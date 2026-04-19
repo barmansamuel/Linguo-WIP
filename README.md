@@ -1,8 +1,8 @@
 # Linguo
 
-**Learn vocabulary through context — one word at a time.**
+**Learn vocabulary through context, one word at a time.**
 
-Linguo is a free, fully local language learning app powered by [Ollama](https://ollama.com). It presents you with an English sentence containing one embedded foreign word, and challenges you to guess its meaning from context. A multi-agent AI workflow generates sentences, evaluates your answers, provides hints, and adapts to your growing vocabulary — all running on your own machine, at no cost.
+Linguo is a free, fully local language learning app powered by [Ollama](https://ollama.com). It presents you with an English sentence containing one embedded foreign word, and challenges you to guess its meaning from context. A multi-agent AI workflow generates sentences, evaluates your answers, provides hints, and adapts to your growing vocabulary, all running on your own machine, at no cost.
 
 ---
 
