@@ -1,14 +1,17 @@
 """
-ui/app.py — Gradio interface for Linguo
+ui/app.py — Gradio 6 compatible interface for Linguo
 
-Tabs:
-  1. Practice  — generate sentences, submit guesses, get hints
-  2. Vocabulary — browse the word bank with mastery indicators
-  3. Progress   — AI-generated session analysis
+Key Gradio 6 changes applied:
+  - gr.update(visible=...) on Row/HTML is unreliable; replaced with always-visible
+    components that render empty strings or placeholder HTML instead.
+  - Every handler wrapped in try/except so errors surface as readable text,
+    not silent red "Error" badges.
+  - theme moved to demo.launch() not gr.Blocks().
 """
 
 from __future__ import annotations
 
+import traceback
 import gradio as gr
 
 from agents.orchestrator import Orchestrator
@@ -16,31 +19,37 @@ from config import SUPPORTED_LANGUAGES, TOPICS
 
 orch = Orchestrator()
 
-
 # ── Helper formatters ──────────────────────────────────────────────────────────
 
 def _highlight_sentence(sentence: str, foreign_word: str) -> str:
-    """Wrap the foreign word in a simple HTML span for display."""
     highlighted = sentence.replace(
         foreign_word,
-        f'<span style="background:#dbeafe;color:#1e40af;padding:2px 8px;'
+        f'<span style="background:#3b5bdb;color:#fff;padding:2px 10px;'
         f'border-radius:6px;font-weight:600;">{foreign_word}</span>',
     )
-    return f'<p style="font-size:1.2rem;line-height:1.8">{highlighted}</p>'
+    return f'<p style="font-size:1.25rem;line-height:1.9;margin:0.5rem 0">{highlighted}</p>'
+
+
+def _error_html(msg: str) -> str:
+    return (
+        f'<div style="background:#fee2e2;color:#991b1b;padding:12px;'
+        f'border-radius:8px;font-family:monospace;white-space:pre-wrap">'
+        f'Error: {msg}</div>'
+    )
 
 
 def _vocab_html(state) -> str:
     if not state.vocab:
-        return "<p style='color:gray'>No words yet — start practicing!</p>"
+        return "<p style='color:gray;padding:1rem'>No words yet — start practicing!</p>"
     rows = ""
     for word, rec in state.vocab.items():
         color = "#dcfce7" if rec.mastered else "#fef9c3" if rec.attempts > 0 else "#f1f5f9"
-        label = "✓ mastered" if rec.mastered else f"{rec.attempts} attempts" if rec.attempts > 0 else "new"
+        label = "✓ mastered" if rec.mastered else f"{rec.attempts} attempt(s)" if rec.attempts > 0 else "new"
         rows += (
-            f'<div style="display:flex;justify-content:space-between;padding:8px 12px;'
-            f'background:{color};border-radius:8px;margin-bottom:6px;">'
-            f'<span><strong>{word}</strong> = {rec.meaning} <em>({rec.lang})</em></span>'
-            f'<span style="font-size:0.85rem;color:#555">{label}</span>'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'padding:8px 14px;background:{color};border-radius:8px;margin-bottom:6px;">'
+            f'<span><strong>{word}</strong> = {rec.meaning} <em style="color:#666">({rec.lang})</em></span>'
+            f'<span style="font-size:0.82rem;color:#555">{label}</span>'
             f'</div>'
         )
     return rows
@@ -49,96 +58,136 @@ def _vocab_html(state) -> str:
 # ── Action handlers ────────────────────────────────────────────────────────────
 
 def handle_generate(language: str, topic: str):
-    sentence_obj, logs = orch.generate_sentence(language, topic)
-    html = _highlight_sentence(sentence_obj.sentence, sentence_obj.foreign_word)
-    state = orch.user_state
-    log_text = "\n".join(logs)
-    return (
-        html,
-        gr.update(visible=True),          # answer row
-        gr.update(visible=False),         # feedback
-        gr.update(visible=False),         # hint box
-        "",                               # clear guess input
-        f"Words seen: {state.total_seen}  |  Mastered: {state.mastered_count}  |  Streak: {state.streak}  |  Level: {state.level}",
-        log_text,
-    )
+    try:
+        sentence_obj, logs = orch.generate_sentence(language, topic)
+        html = _highlight_sentence(sentence_obj.sentence, sentence_obj.foreign_word)
+        state = orch.user_state
+        stats = (
+            f"Words seen: {state.total_seen}  |  "
+            f"Mastered: {state.mastered_count}  |  "
+            f"Streak: {state.streak}  |  "
+            f"Level: {state.level}"
+        )
+        return html, "", "", stats, "\n".join(logs)
+    except Exception as e:
+        tb = traceback.format_exc()
+        err = _error_html(f"{e}\n\n{tb}")
+        return err, "", "", "Error — see sentence area", tb
 
 
 def handle_check(guess: str):
     if not guess.strip():
-        return gr.update(), gr.update(), gr.update()
-    result, logs = orch.check_answer(guess.strip())
-    color = "#dcfce7" if result.correct else "#fee2e2"
-    fb_html = f'<div style="background:{color};padding:12px;border-radius:8px">{result.feedback}</div>'
-    state = orch.user_state
-    stats = f"Words seen: {state.total_seen}  |  Mastered: {state.mastered_count}  |  Streak: {state.streak}  |  Level: {state.level}"
-    return (
-        gr.update(value=fb_html, visible=True),
-        stats,
-        "\n".join(logs),
-    )
+        return "", "", ""
+    try:
+        result, logs = orch.check_answer(guess.strip())
+        color = "#dcfce7" if result.correct else "#fee2e2"
+        text_color = "#166534" if result.correct else "#991b1b"
+        icon = "✓" if result.correct else "✗"
+        fb_html = (
+            f'<div style="background:{color};color:{text_color};padding:12px 16px;'
+            f'border-radius:8px;font-size:1rem">'
+            f'<strong>{icon}</strong> {result.feedback}'
+            f'</div>'
+        )
+        state = orch.user_state
+        stats = (
+            f"Words seen: {state.total_seen}  |  "
+            f"Mastered: {state.mastered_count}  |  "
+            f"Streak: {state.streak}  |  "
+            f"Level: {state.level}"
+        )
+        return fb_html, stats, "\n".join(logs)
+    except Exception as e:
+        tb = traceback.format_exc()
+        return _error_html(f"{e}\n\n{tb}"), "", tb
 
 
 def handle_hint():
-    hint, logs = orch.get_hint()
-    hint_html = f'<div style="background:#ede9fe;padding:10px;border-radius:8px;color:#4c1d95">Hint: {hint}</div>'
-    return gr.update(value=hint_html, visible=True), "\n".join(logs)
+    try:
+        hint, logs = orch.get_hint()
+        hint_html = (
+            f'<div style="background:#ede9fe;color:#4c1d95;padding:10px 14px;'
+            f'border-radius:8px;font-size:0.95rem">'
+            f'<strong>Hint:</strong> {hint}</div>'
+        )
+        return hint_html, "\n".join(logs)
+    except Exception as e:
+        tb = traceback.format_exc()
+        return _error_html(f"{e}\n\n{tb}"), tb
 
 
 def handle_vocab():
-    return _vocab_html(orch.user_state)
+    try:
+        return _vocab_html(orch.user_state)
+    except Exception as e:
+        return _error_html(str(e))
 
 
 def handle_progress():
-    analysis, logs = orch.get_progress()
-    state = orch.user_state
-    review = ", ".join(analysis.get("words_to_review", [])) or "none"
-    adjust = analysis.get("difficulty_adjustment", "maintain")
-    html = (
-        f'<div style="padding:1rem">'
-        f'<p style="font-size:1.1rem">{analysis.get("summary", "")}</p>'
-        f'<hr style="margin:12px 0">'
-        f'<p><strong>Words to review:</strong> {review}</p>'
-        f'<p><strong>Difficulty recommendation:</strong> {adjust}</p>'
-        f'<p><strong>Current level:</strong> {state.level}</p>'
-        f'<p><strong>Mastered:</strong> {state.mastered_count} / {state.total_seen} words</p>'
-        f'</div>'
-    )
-    return html, "\n".join(logs)
+    try:
+        analysis, logs = orch.get_progress()
+        state = orch.user_state
+        review = ", ".join(analysis.get("words_to_review", [])) or "none"
+        adjust = analysis.get("difficulty_adjustment", "maintain")
+        adj_color = {"increase": "#dcfce7", "decrease": "#fee2e2", "maintain": "#f1f5f9"}.get(adjust, "#f1f5f9")
+        html = (
+            f'<div style="padding:0.5rem 0">'
+            f'<p style="font-size:1.05rem;margin-bottom:1rem">{analysis.get("summary", "")}</p>'
+            f'<table style="width:100%;border-collapse:collapse;font-size:0.95rem">'
+            f'<tr><td style="padding:8px;color:#666;width:220px">Words to review</td>'
+            f'<td style="padding:8px"><strong>{review}</strong></td></tr>'
+            f'<tr><td style="padding:8px;color:#666">Difficulty</td>'
+            f'<td style="padding:8px"><span style="background:{adj_color};padding:2px 10px;border-radius:6px">{adjust}</span></td></tr>'
+            f'<tr><td style="padding:8px;color:#666">Current level</td>'
+            f'<td style="padding:8px"><strong>{state.level}</strong></td></tr>'
+            f'<tr><td style="padding:8px;color:#666">Progress</td>'
+            f'<td style="padding:8px"><strong>{state.mastered_count} / {state.total_seen}</strong> words mastered</td></tr>'
+            f'</table></div>'
+        )
+        return html, "\n".join(logs)
+    except Exception as e:
+        tb = traceback.format_exc()
+        return _error_html(f"{e}\n\n{tb}"), tb
 
 
 # ── Layout ─────────────────────────────────────────────────────────────────────
 
 def launch_app():
-    with gr.Blocks(title="Linguo", theme=gr.themes.Soft()) as demo:
+    with gr.Blocks(title="Linguo") as demo:
         gr.Markdown("# Linguo\n*Learn vocabulary through context — one word at a time*")
 
         with gr.Tabs():
-            # ── Practice tab ──────────────────────────────────────────────────
+
+            # ── Practice tab ───────────────────────────────────────────────────
             with gr.Tab("Practice"):
                 with gr.Row():
                     lang_dd  = gr.Dropdown(SUPPORTED_LANGUAGES, value="Spanish", label="Language")
                     topic_dd = gr.Dropdown(TOPICS, value="everyday life", label="Topic")
                     gen_btn  = gr.Button("New sentence", variant="primary")
 
-                stats_box = gr.Textbox(label="Session stats", interactive=False, lines=1)
+                stats_box     = gr.Textbox(label="Session stats", interactive=False, lines=1)
                 sentence_html = gr.HTML("<p style='color:gray'>Press 'New sentence' to begin.</p>")
+                feedback_html = gr.HTML()
+                hint_html     = gr.HTML()
 
-                with gr.Row(visible=False) as answer_row:
-                    guess_input = gr.Textbox(placeholder="Type the English meaning...", label="Your guess", scale=4)
-                    check_btn   = gr.Button("Check", variant="primary", scale=1)
-                    hint_btn    = gr.Button("Hint", scale=1)
-
-                feedback_html = gr.HTML(visible=False)
-                hint_html     = gr.HTML(visible=False)
+                with gr.Row():
+                    guess_input = gr.Textbox(
+                        placeholder="Type the English meaning...",
+                        label="Your guess",
+                        scale=4,
+                        interactive=True,
+                    )
+                    with gr.Column(scale=1, min_width=80):
+                        check_btn = gr.Button("Check", variant="primary")
+                        hint_btn  = gr.Button("Hint")
 
                 with gr.Accordion("Agent logs", open=False):
-                    log_box = gr.Textbox(lines=6, interactive=False, label="")
+                    log_box = gr.Textbox(lines=8, interactive=False, label="")
 
                 gen_btn.click(
                     handle_generate,
                     inputs=[lang_dd, topic_dd],
-                    outputs=[sentence_html, answer_row, feedback_html, hint_html, guess_input, stats_box, log_box],
+                    outputs=[sentence_html, feedback_html, hint_html, stats_box, log_box],
                 )
                 check_btn.click(
                     handle_check,
@@ -149,22 +198,27 @@ def launch_app():
                     handle_hint,
                     outputs=[hint_html, log_box],
                 )
+                guess_input.submit(
+                    handle_check,
+                    inputs=[guess_input],
+                    outputs=[feedback_html, stats_box, log_box],
+                )
 
-            # ── Vocabulary tab ────────────────────────────────────────────────
+            # ── Vocabulary tab ─────────────────────────────────────────────────
             with gr.Tab("Vocabulary"):
                 refresh_btn = gr.Button("Refresh")
-                vocab_html  = gr.HTML()
+                vocab_html  = gr.HTML("<p style='color:gray;padding:1rem'>No words yet — start practicing!</p>")
                 refresh_btn.click(handle_vocab, outputs=[vocab_html])
 
-            # ── Progress tab ──────────────────────────────────────────────────
+            # ── Progress tab ───────────────────────────────────────────────────
             with gr.Tab("Progress"):
-                analyze_btn    = gr.Button("Analyze my progress", variant="primary")
-                progress_html  = gr.HTML()
+                analyze_btn   = gr.Button("Analyze my progress", variant="primary")
+                progress_html = gr.HTML()
                 with gr.Accordion("Agent logs", open=False):
-                    prog_log_box = gr.Textbox(lines=6, interactive=False, label="")
+                    prog_log_box = gr.Textbox(lines=8, interactive=False, label="")
                 analyze_btn.click(
                     handle_progress,
                     outputs=[progress_html, prog_log_box],
                 )
 
-    demo.launch()
+    demo.launch(theme=gr.themes.Soft())
